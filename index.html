@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Parental Control Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    padding: 15px;
+    margin: 0;
+    background: #f9f9f9;
+  }
+
+  h1 {
+    text-align: center;
+    margin-bottom: 20px;
+    font-size: 1.8em;
+    color: #333;
+  }
+
+  .filter-select {
+    margin-bottom: 15px;
+    font-size: 1em;
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    display: block;
+  }
+
+  thead {
+    background-color: #007BFF;
+    color: white;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 12px 10px;
+    border: 1px solid #ddd;
+    font-size: 1em;
+    white-space: nowrap;
+  }
+
+  tbody tr:nth-child(even) {
+    background-color: #f2f2f2;
+  }
+
+  tbody tr:hover {
+    background-color: #e9ecef;
+  }
+
+  @media (max-width: 600px) {
+    h1 { font-size: 1.5em; }
+    th, td { font-size: 0.9em; padding: 10px 6px; }
+  }
+
+  .table-container {
+    overflow-x: auto;
+  }
+</style>
+</head>
+<body>
+
+<h1>Parental Control Dashboard</h1>
+
+<select id="date-select" class="filter-select"></select>
+
+<div class="table-container">
+  <table id="dashboard-table" aria-label="Parental Control Daily Usage">
+    <thead>
+      <tr>
+        <th>Child Name</th>
+        <th>Total Minutes (Today)</th>
+        <th>Average Session</th>
+        <th>Last Login</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<script>
+const csvUrl = 'PASTE_YOUR_PUBLISHED_CSV_URL_HERE';
+
+let parsedRows = [];
+
+function groupDataByDate(data) {
+  const byDate = {};
+
+  data.forEach(row => {
+    const [timestamp, childName, activeWindow, openApps, sessionMinutes] = row;
+    const dateStr = new Date(timestamp).toISOString().split("T")[0]; // "YYYY-MM-DD"
+
+    if (!byDate[dateStr]) byDate[dateStr] = [];
+    byDate[dateStr].push({ timestamp, childName, sessionMinutes: parseInt(sessionMinutes) });
+  });
+
+  return byDate;
+}
+
+function renderDateDropdown(dates) {
+  const select = document.getElementById('date-select');
+  select.innerHTML = '';
+
+  dates.sort().reverse().forEach(date => {
+    const option = document.createElement('option');
+    option.value = date;
+    option.textContent = date;
+    select.appendChild(option);
+  });
+
+  select.addEventListener('change', () => {
+    renderTableForDate(select.value);
+  });
+
+  renderTableForDate(select.value);
+}
+
+function renderTableForDate(date) {
+  const tableBody = document.querySelector('#dashboard-table tbody');
+  tableBody.innerHTML = '';
+
+  const rows = parsedRows.filter(row => new Date(row.timestamp).toISOString().startsWith(date));
+  const summary = {};
+
+  rows.forEach(row => {
+    const { childName, sessionMinutes, timestamp } = row;
+    if (!summary[childName]) {
+      summary[childName] = {
+        total: 0,
+        sessions: [],
+        lastLogin: null
+      };
+    }
+    summary[childName].total += sessionMinutes;
+    summary[childName].sessions.push(sessionMinutes);
+
+    const ts = new Date(timestamp);
+    if (!summary[childName].lastLogin || ts > summary[childName].lastLogin) {
+      summary[childName].lastLogin = ts;
+    }
+  });
+
+  Object.entries(summary).forEach(([child, stats]) => {
+    const avg = (stats.total / stats.sessions.length).toFixed(1);
+    const lastLogin = stats.lastLogin.toLocaleString();
+
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${child}</td>
+      <td>${stats.total}</td>
+      <td>${avg}</td>
+      <td>${lastLogin}</td>
+    `;
+    tableBody.appendChild(row);
+  });
+}
+
+Papa.parse(csvUrl, {
+  download: true,
+  complete: function(results) {
+    results.data.shift(); // remove header
+    parsedRows = results.data.filter(row => row.length >= 5).map(row => ({
+      timestamp: row[0],
+      childName: row[1],
+      activeWindow: row[2],
+      openApps: row[3],
+      sessionMinutes: row[4]
+    }));
+
+    const groupedByDate = groupDataByDate(parsedRows);
+    renderDateDropdown(Object.keys(groupedByDate));
+  }
+});
+</script>
+
+</body>
+</html>
