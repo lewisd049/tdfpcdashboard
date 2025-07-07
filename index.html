@@ -1,267 +1,103 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Parental Control Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 15px;
-      background: #f4f4f4;
-    }
-
-    h1 {
-      text-align: center;
-      color: #333;
-    }
-
-    select {
-      margin: 10px 5px;
-      padding: 8px;
-      font-size: 1em;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 20px;
-    }
-
-    th, td {
-      padding: 10px;
-      border: 1px solid #ccc;
-      font-size: 1em;
-    }
-
-    thead {
-      background-color: #007BFF;
-      color: white;
-    }
-
-    .chart-container {
-      max-width: 600px;
-      margin: 20px auto;
-    }
-
-    @media (max-width: 600px) {
-      table, th, td {
-        font-size: 0.9em;
-      }
-    }
+    body { font-family: Arial; padding: 20px; max-width: 800px; margin: auto; }
+    canvas { max-width: 100%; }
+    select, input { padding: 5px; margin: 5px; }
   </style>
 </head>
 <body>
+  <h2>Parental Control Dashboard</h2>
 
-  <h1>Parental Control Dashboard</h1>
+  <label for="childSelect">Select Child:</label>
+  <select id="childSelect"></select>
 
-  <label for="child-select">Select Child:</label>
-  <select id="child-select"></select>
+  <label for="limitInput">Daily Time Limit (minutes):</label>
+  <input type="number" id="limitInput" min="0" />
+  <button onclick="saveLimit()">Save Limit</button>
 
-  <label for="date-select">Select Date:</label>
-  <select id="date-select"></select>
+  <p id="summary"></p>
+  <canvas id="appChart" width="400" height="400"></canvas>
 
-  <div class="chart-container">
-    <canvas id="appChart"></canvas>
-  </div>
+  <script>
+    const csvUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRO214XiVePEkiLFjNf7or55rEXmaMzl3pTTiE_7B7K0NcAZuNE0gtZqJYwt5XRYAmxiz_OHtZbhwN7/pub?gid=0&single=true&output=csv";
+    let data = [];
+    let chart;
+    let timeLimits = JSON.parse(localStorage.getItem("timeLimits") || "{}");
 
-  <table>
-    <thead>
-      <tr>
-        <th>Child Name</th>
-        <th>Total Minutes</th>
-        <th>Avg. Session</th>
-        <th>Time Limit (Editable)</th>
-        <th>Last Login</th>
-      </tr>
-    </thead>
-    <tbody id="stats-body"></tbody>
-  </table>
+    fetch(csvUrl)
+      .then(res => res.text())
+      .then(csv => {
+        const rows = csv.trim().split("\n").slice(1).map(r => r.split(","));
+        data = rows.map(r => ({
+          timestamp: r[0],
+          child: r[1],
+          minutes: parseInt(r[2]),
+          apps: r[3].split(", ").map(app => app.trim())
+        }));
+        const children = [...new Set(data.map(d => d.child))];
+        const sel = document.getElementById("childSelect");
+        children.forEach(c => {
+          const opt = document.createElement("option");
+          opt.value = opt.text = c;
+          sel.appendChild(opt);
+        });
+        sel.onchange = updateDashboard;
+        sel.value = children[0];
+        updateDashboard();
+      });
 
-<script>
-const csvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRO214XiVePEkiLFjNf7or55rEXmaMzl3pTTiE_7B7K0NcAZuNE0gtZqJYwt5XRYAmxiz_OHtZbhwN7/pub?gid=0&single=true&output=csv';
-let rawRows = [];
-let timeLimits = {};
-let selectedChild = '';
-let selectedDate = '';
+    function updateDashboard() {
+      const selected = document.getElementById("childSelect").value;
+      const limitInput = document.getElementById("limitInput");
+      limitInput.value = timeLimits[selected] || "";
 
-function parseCSV(data) {
-  data.shift();
-  return data
-    .filter(row => row.length >= 5)
-    .map(row => ({
-      timestamp: row[0],
-      childName: row[1],
-      activeWindow: row[2],
-      openApps: row[3],
-      sessionMinutes: parseInt(row[4])
-    }));
-}
+      const filtered = data.filter(d => d.child === selected);
 
-function groupByDateAndChild(rows) {
-  const grouped = {};
-  rows.forEach(row => {
-    const date = new Date(row.timestamp).toISOString().split('T')[0];
-    const key = `${row.childName}-${date}`;
-    if (!grouped[key]) grouped[key] = [];
-    grouped[key].push(row);
-  });
-  return grouped;
-}
+      // Group by app usage
+      const appCount = {};
+      let totalTime = 0;
+      const today = new Date().toISOString().split("T")[0];
 
-function extractUniqueDates(rows) {
-  const dates = new Set(rows.map(row => new Date(row.timestamp).toISOString().split("T")[0]));
-  return [...dates].sort().reverse();
-}
-
-function extractUniqueChildren(rows) {
-  const names = new Set(rows.map(r => r.childName));
-  return [...names].sort();
-}
-
-function updateDropdowns(children, dates) {
-  const childSel = document.getElementById("child-select");
-  const dateSel = document.getElementById("date-select");
-  childSel.innerHTML = '';
-  dateSel.innerHTML = '';
-
-  children.forEach(name => {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    childSel.appendChild(opt);
-  });
-
-  dates.forEach(date => {
-    const opt = document.createElement("option");
-    opt.value = date;
-    opt.textContent = date;
-    dateSel.appendChild(opt);
-  });
-
-  selectedChild = children[0];
-  selectedDate = dates[0];
-
-  childSel.addEventListener("change", () => {
-    selectedChild = childSel.value;
-    renderEverything();
-  });
-
-  dateSel.addEventListener("change", () => {
-    selectedDate = dateSel.value;
-    renderEverything();
-  });
-}
-
-function summarizeData(rows) {
-  const summary = {};
-  rows.forEach(row => {
-    if (!summary[row.childName]) {
-      summary[row.childName] = { total: 0, sessions: [], lastLogin: null };
-    }
-    summary[row.childName].total += row.sessionMinutes;
-    summary[row.childName].sessions.push(row.sessionMinutes);
-    const t = new Date(row.timestamp);
-    if (!summary[row.childName].lastLogin || t > summary[row.childName].lastLogin) {
-      summary[row.childName].lastLogin = t;
-    }
-  });
-  return summary;
-}
-
-function renderStats(summary) {
-  const tbody = document.getElementById("stats-body");
-  tbody.innerHTML = '';
-
-  Object.entries(summary).forEach(([child, stats]) => {
-    const avg = (stats.total / stats.sessions.length).toFixed(1);
-    const last = stats.lastLogin.toLocaleString();
-    const limit = timeLimits[child] || 60;
-    const isOver = stats.total > limit;
-
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${child}</td>
-      <td style="color:${isOver ? 'red' : 'black'}">${stats.total}</td>
-      <td>${avg}</td>
-      <td><input type="number" value="${limit}" data-child="${child}" style="width:60px"/></td>
-      <td>${last}</td>
-    `;
-    tbody.appendChild(row);
-  });
-
-  document.querySelectorAll("input[type=number]").forEach(input => {
-    input.addEventListener("change", () => {
-      const name = input.dataset.child;
-      const newLimit = parseInt(input.value);
-      timeLimits[name] = newLimit;
-      renderEverything();
-    });
-  });
-}
-
-function buildAppPieChart(rows) {
-  const appCounts = {};
-  rows.forEach(r => {
-    const apps = r.openApps.split(',');
-    apps.forEach(app => {
-      const name = app.trim();
-      if (!appCounts[name]) appCounts[name] = 0;
-      appCounts[name]++;
-    });
-  });
-
-  const labels = Object.keys(appCounts);
-  const counts = Object.values(appCounts);
-
-  new Chart(document.getElementById("appChart"), {
-    type: "pie",
-    data: {
-      labels,
-      datasets: [{
-        label: "App Usage",
-        data: counts,
-        backgroundColor: labels.map((_, i) =>
-          `hsl(${i * 360 / labels.length}, 70%, 60%)`
-        )
-      }]
-    },
-    options: {
-      plugins: {
-        legend: {
-          position: 'bottom'
+      filtered.forEach(entry => {
+        const entryDate = new Date(entry.timestamp).toISOString().split("T")[0];
+        if (entryDate === today) {
+          totalTime += entry.minutes;
+          entry.apps.forEach(app => {
+            appCount[app] = (appCount[app] || 0) + entry.minutes;
+          });
         }
+      });
+
+      document.getElementById("summary").innerText = `Today: ${totalTime} minutes used.`;
+
+      // Pie chart
+      const ctx = document.getElementById("appChart").getContext("2d");
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'pie',
+        data: {
+          labels: Object.keys(appCount),
+          datasets: [{
+            data: Object.values(appCount),
+            backgroundColor: ['#ff6384', '#36a2eb', '#ffce56', '#4caf50', '#9c27b0']
+          }]
+        }
+      });
+    }
+
+    function saveLimit() {
+      const selected = document.getElementById("childSelect").value;
+      const value = parseInt(document.getElementById("limitInput").value);
+      if (!isNaN(value)) {
+        timeLimits[selected] = value;
+        localStorage.setItem("timeLimits", JSON.stringify(timeLimits));
+        alert("Limit saved!");
       }
     }
-  });
-}
-
-function renderEverything() {
-  const filtered = rawRows.filter(row =>
-    row.childName === selectedChild &&
-    new Date(row.timestamp).toISOString().startsWith(selectedDate)
-  );
-
-  const summary = summarizeData(filtered);
-  renderStats(summary);
-  buildAppPieChart(filtered);
-}
-
-Papa.parse(csvUrl, {
-  download: true,
-  complete: function(results) {
-    rawRows = parseCSV(results.data);
-    const children = extractUniqueChildren(rawRows);
-    const dates = extractUniqueDates(rawRows);
-    children.forEach(name => timeLimits[name] = 60); // default 60 mins
-
-    updateDropdowns(children, dates);
-    renderEverything();
-  }
-});
-</script>
-
+  </script>
 </body>
 </html>
